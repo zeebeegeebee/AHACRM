@@ -1,16 +1,165 @@
 if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register('/sw.js', { scope: '/' })
-        .then(registration => {
-          console.log('SW registered: ', registration.scope);
-          // Update the service worker periodically
-          setInterval(() => registration.update(), 60 * 60 * 1000);
+    window.addEventListener('load', function() {
+        // Register with updated scope and features
+        navigator.serviceWorker.register('/sw.js', { 
+          scope: '/',
+          updateViaCache: 'none'  // Important for fresh updates
         })
-        .catch(err => {
-          console.log('ServiceWorker registration failed: ', err);
+        .then(function(registration) {
+          console.log('ServiceWorker registration successful with scope:', registration.scope);
+          
+          // Check for updates every hour
+          setInterval(() => {
+            registration.update().then(() => {
+              console.log('ServiceWorker update check completed');
+            }).catch(err => {
+              console.log('ServiceWorker update failed:', err);
+            });
+          }, 60 * 60 * 1000);
+          
+          // Push Notification Setup
+          if ('PushManager' in window) {
+            setupPushNotifications(registration);
+          }
+          
+          // Track installation state
+          registration.addEventListener('updatefound', () => {
+            const newWorker = registration.installing;
+            console.log('New service worker found:', newWorker.state);
+            
+            newWorker.addEventListener('statechange', () => {
+              console.log('Service worker state changed:', newWorker.state);
+              if (newWorker.state === 'installed') {
+                // Optional: Show "Update available" toast to user
+                if (navigator.serviceWorker.controller) {
+                  showAppNotification('Update Available', 'Refresh to get the latest version');
+                }
+              }
+            });
           });
+        })
+        .catch(function(err) {
+          console.log('ServiceWorker registration failed:', err);
+        });
+        
+        // Listen for controller changes (when new SW takes control)
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+          console.log('Controller changed - reloading for fresh content');
+          window.location.reload();
+        });
     });
 }
+
+// Push Notification Setup Function
+function setupPushNotifications(registration) {
+    // Check current permission state
+    Notification.requestPermission().then(permission => {
+      if (permission === 'granted') {
+        console.log('Push notifications permission granted');
+        
+        // Subscribe to push service
+        registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array('YOUR_VAPID_PUBLIC_KEY')
+        })
+        .then(subscription => {
+          console.log('Push subscription successful');
+          // Send subscription to server
+          sendSubscriptionToServer(subscription);
+          
+          // Set up periodic sync (if supported)
+          if ('periodicSync' in registration) {
+            registerPeriodicSync(registration);
+          }
+        })
+        .catch(err => {
+          console.error('Push subscription failed:', err);
+          // Fallback to polling
+          startNotificationPolling();
+        });
+      } else {
+        console.log('Push notifications permission denied');
+        // Fallback to polling
+        startNotificationPolling();
+      }
+    });
+  }
+  
+  // Helper function to convert VAPID key
+  function urlBase64ToUint8Array(base64String) {
+    const padding = '='.repeat((4 - base64String.length % 4) % 4);
+    const base64 = (base64String + padding)
+      .replace(/-/g, '+')
+      .replace(/_/g, '/');
+    const rawData = window.atob(base64);
+    return Uint8Array.from([...rawData].map((char) => char.charCodeAt(0)));
+  }
+  
+  // Send subscription to your backend
+  function sendSubscriptionToServer(subscription) {
+    fetch('/api/push-subscribe', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(subscription)
+    })
+    .then(response => {
+      if (!response.ok) throw new Error('Subscription failed');
+      console.log('Subscription sent to server');
+    })
+    .catch(err => {
+      console.error('Failed to send subscription:', err);
+    });
+  }
+  
+  // Periodic Sync Registration (for background updates)
+  function registerPeriodicSync(registration) {
+    registration.periodicSync.register('customer-updates', {
+      minInterval: 24 * 60 * 60 * 1000 // Daily updates
+    })
+    .then(() => console.log('Periodic sync registered'))
+    .catch(err => console.error('Periodic sync failed:', err));
+  }
+  
+  // Fallback Polling Mechanism
+  function startNotificationPolling() {
+    // Immediate check
+    checkForNotifications();
+    // Then check every 4 hours
+    setInterval(checkForNotifications, 4 * 60 * 60 * 1000);
+  }
+  
+  function checkForNotifications() {
+    fetch('/api/check-notifications')
+      .then(response => response.json())
+      .then(notifications => {
+        notifications.forEach(notif => {
+          showAppNotification(notif.title, notif.message);
+        });
+      })
+      .catch(err => console.error('Notification check failed:', err));
+  }
+  
+  // In-app notification display
+  function showAppNotification(title, message) {
+    if ('Notification' in window && Notification.permission === 'granted') {
+      new Notification(title, { 
+        body: message,
+        icon: '/assets/icons/icon-192x192.png'
+      });
+    } else {
+      // Fallback to in-app notification UI
+      const notification = document.createElement('div');
+      notification.className = 'app-notification';
+      notification.innerHTML = `
+        <strong>${title}</strong>
+        <p>${message}</p>
+      `;
+      document.body.appendChild(notification);
+      setTimeout(() => notification.remove(), 5000);
+    }
+  }
 
 let db;
 
