@@ -161,8 +161,6 @@ function setupPushNotifications(registration) {
     }
   }
 
-let db;
-
 //Revised app logic to use IndexedDB for customer management
 document.addEventListener('DOMContentLoaded', () => {
     // Hide splash screen after everything loads
